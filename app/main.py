@@ -2,6 +2,7 @@ import argparse
 import os
 import sys
 import json
+import subprocess
 
 from openai import OpenAI
 from pathlib import Path
@@ -48,6 +49,21 @@ WRITE_TOOL = {
     },
 }
 
+BASH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "Bash",
+        "description": "Execute a shell command",
+        "parameters": {
+            "type": "object",
+            "required": ["command"],
+            "properties": {
+                "command": {"type": "string", "description": "The command to execute"}
+            },
+        },
+    },
+}
+
 
 def main():
     load_dotenv()
@@ -70,7 +86,7 @@ def main():
             # Take a look at OpenRouter for other models to replace it.
             model="openrouter/free",
             messages=messages,
-            tools=[READ_TOOL, WRITE_TOOL],
+            tools=[READ_TOOL, WRITE_TOOL, BASH_TOOL],
         )
 
         if not chat.choices or len(chat.choices) == 0:
@@ -97,6 +113,7 @@ def main():
                             "content": file_content,
                         }
                     )
+
                 elif tool_call.function.name == "Write":
                     args_dict = json.loads(tool_call.function.arguments)
                     file_path = args_dict.get("file_path")
@@ -113,6 +130,33 @@ def main():
                             result_message = f"Error writing file: {str(e)}"
                     else:
                         result_message = "Error: 'file_path' argument is missing."
+
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": result_message,
+                        }
+                    )
+
+                elif tool_call.function.name == "Bash":
+                    args_dict = json.loads(tool_call.function.arguments)
+                    command = args_dict.get("command")
+
+                    result_message = ""
+                    if command:
+                        try:
+                            res = subprocess.run(
+                                command,
+                                shell=True,
+                                capture_output=True,
+                                text=True,
+                            )
+                            result_message = res.stdout + res.stderr
+                        except Exception as e:
+                            result_message = f"Error executing command: {str(e)}"
+                    else:
+                        result_message = "Error: 'command' argument is missing."
 
                     messages.append(
                         {
