@@ -1,11 +1,12 @@
 import argparse
 import os
 import sys
+import json
 
 from openai import OpenAI
 from pathlib import Path
 from dotenv import load_dotenv
-
+from pathlib import Path
 
 
 def main():
@@ -24,15 +25,49 @@ def main():
     client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
     chat = client.chat.completions.create(
-        model="inclusionai/ling-3.0-tiny:free",
+        # I chose this model for my tests.
+        # Take a look at OpenRouter for other models to replace it.
+        model="openrouter/free",
         messages=[{"role": "user", "content": args.p}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "Read",
+                    "description": "Read and return the contents of a file",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "file_path": {
+                                "type": "string",
+                                "description": "The path to the file to read",
+                            }
+                        },
+                        "required": ["file_path"],
+                    },
+                },
+            }
+        ],
     )
 
     if not chat.choices or len(chat.choices) == 0:
         raise RuntimeError("no choices in response")
 
+    message = chat.choices[0].message
     print("Logs from your program will appear here!", file=sys.stderr)
-    print(chat.choices[0].message.content)
+
+    if message.tool_calls:
+        tool_call = message.tool_calls[0]
+        if tool_call.function.name == "Read":
+            args_dict = json.loads(tool_call.function.arguments)
+            file_path = args_dict.get("file_path")
+
+            if file_path:
+                content = Path(file_path).read_text()
+                print(content, end="")
+    else:
+        if message.content:
+            print(message.content)
 
 
 if __name__ == "__main__":
