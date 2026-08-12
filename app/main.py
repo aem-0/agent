@@ -2,174 +2,51 @@ import argparse
 import os
 import sys
 import json
-import subprocess
 
 from openai import OpenAI
 from pathlib import Path
 from dotenv import load_dotenv
-from pathlib import Path
 
-READ_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "Read",
-        "description": "Read and return the contents of a file",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "file_path": {
-                    "type": "string",
-                    "description": "The path to the file to read",
-                }
-            },
-            "required": ["file_path"],
-        },
-    },
-}
+from tools import (
+    READ_TOOL,
+    WRITE_TOOL,
+    BASH_TOOL,
+    read_file,
+    write_file,
+    run_bash,
+    Tool,
+    ToolRegistry,
+)
 
-WRITE_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "Write",
-        "description": "Write content to a file",
-        "parameters": {
-            "type": "object",
-            "required": ["file_path", "content"],
-            "properties": {
-                "file_path": {
-                    "type": "string",
-                    "description": "The path of the file to write to",
-                },
-                "content": {
-                    "type": "string",
-                    "description": "The content to write to the file",
-                },
-            },
-        },
-    },
-}
-
-BASH_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "Bash",
-        "description": "Execute a shell command",
-        "parameters": {
-            "type": "object",
-            "required": ["command"],
-            "properties": {
-                "command": {"type": "string", "description": "The command to execute"}
-            },
-        },
-    },
-}
+from agent import Agent
 
 
 def main():
     load_dotenv()
 
-    API_KEY = os.getenv("OPENROUTER_API_KEY")
-    BASE_URL = os.getenv("OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v1")
-
     p = argparse.ArgumentParser()
     p.add_argument("-p", required=True)
     args = p.parse_args()
+
+    API_KEY = os.getenv("OPENROUTER_API_KEY")
+    BASE_URL = os.getenv("OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v1")
 
     if not API_KEY:
         raise RuntimeError("OPENROUTER_API_KEY is not set")
 
     client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
-    messages = [{"role": "user", "content": args.p}]
-    while True:
-        chat = client.chat.completions.create(
-            # I chose this model for my tests.
-            # Take a look at OpenRouter for other models to replace it.
-            model="openrouter/free",
-            messages=messages,
-            tools=[READ_TOOL, WRITE_TOOL, BASH_TOOL],
-        )
 
-        if not chat.choices or len(chat.choices) == 0:
-            raise RuntimeError("no choices in response")
+    t = ToolRegistry()
+    t.register(Tool(READ_TOOL, read_file))
+    t.register(Tool(WRITE_TOOL, write_file))
+    t.register(Tool(BASH_TOOL, run_bash))
 
-        message = chat.choices[0].message
-        messages.append(message.model_dump())
+    # I chose this model for my tests.
+    # Take a look at OpenRouter for other models to replace it.
+    agent = Agent(client=client, model="openrouter/free", registry=t)
+    result = agent.run(args.p)
 
-        if message.tool_calls:
-            for tool_call in message.tool_calls:
-                if tool_call.function.name == "Read":
-                    args_dict = json.loads(tool_call.function.arguments)
-                    file_path = args_dict.get("file_path")
-                    file_content = ""
-                    if file_path and Path(file_path).exists():
-                        file_content = Path(file_path).read_text()
-                    else:
-                        file_content = f"Error: File '{file_path}' not found."
-
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "content": file_content,
-                        }
-                    )
-
-                elif tool_call.function.name == "Write":
-                    args_dict = json.loads(tool_call.function.arguments)
-                    file_path = args_dict.get("file_path")
-                    content = args_dict.get("content", "")
-
-                    result_message = ""
-                    if file_path:
-                        try:
-                            path = Path(file_path)
-                            path.parent.mkdir(parents=True, exist_ok=True)
-                            path.write_text(content)
-                            result_message = f"Successfully wrote to {file_path}"
-                        except Exception as e:
-                            result_message = f"Error writing file: {str(e)}"
-                    else:
-                        result_message = "Error: 'file_path' argument is missing."
-
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "content": result_message,
-                        }
-                    )
-
-                elif tool_call.function.name == "Bash":
-                    args_dict = json.loads(tool_call.function.arguments)
-                    command = args_dict.get("command")
-
-                    result_message = ""
-                    if command:
-                        try:
-                            res = subprocess.run(
-                                command,
-                                shell=True,
-                                capture_output=True,
-                                text=True,
-                            )
-                            result_message = res.stdout + res.stderr
-                        except Exception as e:
-                            result_message = f"Error executing command: {str(e)}"
-                    else:
-                        result_message = "Error: 'command' argument is missing."
-
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "content": result_message,
-                        }
-                    )
-        else:
-            print("Logs from your program will appear here!", file=sys.stderr)
-            if message.content:
-                print(message.content)
-            break
+    print(result)
 
 
 if __name__ == "__main__":
