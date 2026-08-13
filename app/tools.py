@@ -66,7 +66,7 @@ def read_file(file_path: str) -> str:
 
 def write_file(file_path: str, content: str) -> str:
     try:
-        path = path(file_path)
+        path = Path(file_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
         return f"Successfully wrote to {file_path}"
